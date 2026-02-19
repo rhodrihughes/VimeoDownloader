@@ -1,19 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build: pyinstaller build/mac.spec
+# Run from project root: pyinstaller build/mac.spec
+
+import os
+PROJ_ROOT = os.path.abspath(os.path.join(os.path.dirname(SPECPATH), ''))
+# SPECPATH is set by PyInstaller to the directory containing this spec file
+# So PROJ_ROOT = parent of build/ = project root
+PROJ_ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 
 block_cipher = None
 
 a = Analysis(
-    ['../src/main.py'],
-    pathex=['../src'],
+    [os.path.join(PROJ_ROOT, 'src', 'main.py')],
+    pathex=[os.path.join(PROJ_ROOT, 'src')],
     binaries=[],
     datas=[],
-    hiddenimports=['customtkinter'],
+    hiddenimports=['customtkinter', 'tkinter', 'tkinter.filedialog', '_tkinter'],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
     cipher=block_cipher,
 )
 
@@ -26,7 +30,6 @@ exe = EXE(
     exclude_binaries=True,
     name='VimeoDownloader',
     debug=False,
-    bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
@@ -46,7 +49,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='VimeoDownloader.app',
-    icon='../assets/icon.icns',
+    icon=os.path.join(PROJ_ROOT, 'assets', 'macicon.icns'),
     bundle_identifier='com.vimeodownloader.app',
     info_plist={
         'NSHighResolutionCapable': True,
