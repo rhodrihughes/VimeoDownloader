@@ -4,6 +4,7 @@ CustomTkinter GUI for Vimeo Downloader — wizard-style stepped flow.
 """
 
 import threading
+import re
 import customtkinter as ctk
 from pathlib import Path
 from tkinter import filedialog
@@ -417,7 +418,7 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------ #
 
     def _verify_token(self):
-        token = self.token_entry.get().strip()
+        token = re.sub(r'[^\x20-\x7E]', '', ''.join(self.token_entry.get().split()))
         if not token:
             self.token_status.configure(text="⚠️  Please paste a token first.", text_color="#e67e22")
             return
