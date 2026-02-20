@@ -5,6 +5,7 @@ CustomTkinter GUI for Vimeo Downloader — wizard-style stepped flow.
 
 import threading
 import customtkinter as ctk
+from pathlib import Path
 from tkinter import filedialog
 from downloader import VimeoDownloader
 
@@ -202,10 +203,11 @@ class App(ctk.CTk):
         )
         self.vimeo_folder_menu.pack(pady=(0, 8))
 
-        ctk.CTkButton(
+        self.vimeo_folder_continue_btn = ctk.CTkButton(
             self.step3.body, text="Continue", width=120,
             command=self._confirm_folder_selection
-        ).pack(anchor="w")
+        )
+        self.vimeo_folder_continue_btn.pack(anchor="w")
 
         # ── Step 4: Quality ────────────────────────────────────────────
         self.step4 = StepCard(self.scroll, 4, "Choose video quality")
@@ -268,18 +270,68 @@ class App(ctk.CTk):
         inner = ctk.CTkFrame(progress_card, fg_color="transparent")
         inner.pack(fill="x", padx=14, pady=12)
 
+        # Overall progress
+        ctk.CTkLabel(
+            inner, text="OVERALL", font=ctk.CTkFont(size=11),
+            text_color="#666666"
+        ).pack(anchor="w")
         self.progress_bar = ctk.CTkProgressBar(inner, width=580)
         self.progress_bar.set(0)
-        self.progress_bar.pack(pady=(0, 4))
-
+        self.progress_bar.pack(pady=(2, 2))
         self.progress_label = ctk.CTkLabel(
             inner, text="Waiting to start…", font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.progress_label.pack(anchor="w")
+        self.progress_label.pack(anchor="w", pady=(0, 2))
+        self.bandwidth_label = ctk.CTkLabel(
+            inner, text="", font=ctk.CTkFont(size=11),
+            text_color="#555555"
+        )
+        self.bandwidth_label.pack(anchor="w", pady=(0, 12))
 
-        self.log_box = ctk.CTkTextbox(inner, width=580, height=160, state="disabled")
-        self.log_box.pack(pady=(10, 0))
+        # Per-worker progress slots (3 concurrent workers)
+        ctk.CTkLabel(
+            inner, text="ACTIVE DOWNLOADS", font=ctk.CTkFont(size=11),
+            text_color="#666666"
+        ).pack(anchor="w", pady=(0, 6))
+
+        self._worker_bars = []    # CTkProgressBar per slot
+        self._worker_labels = []  # CTkLabel per slot (filename + size)
+        self._worker_speed_labels = []  # CTkLabel per slot (speed)
+
+        for i in range(3):
+            slot = ctk.CTkFrame(inner, fg_color="#2a2a2a", corner_radius=6)
+            slot.pack(fill="x", pady=(0, 6))
+
+            header = ctk.CTkFrame(slot, fg_color="transparent")
+            header.pack(fill="x", padx=10, pady=(6, 2))
+
+            ctk.CTkLabel(
+                header, text=f"Worker {i + 1}", font=ctk.CTkFont(size=11),
+                text_color="#555555", width=60, anchor="w"
+            ).pack(side="left")
+
+            lbl = ctk.CTkLabel(
+                header, text="—", font=ctk.CTkFont(size=11),
+                text_color="#888888", anchor="w"
+            )
+            lbl.pack(side="left", padx=(6, 0))
+            self._worker_labels.append(lbl)
+
+            spd = ctk.CTkLabel(
+                header, text="", font=ctk.CTkFont(size=11),
+                text_color="#4a9eda", anchor="e"
+            )
+            spd.pack(side="right")
+            self._worker_speed_labels.append(spd)
+
+            bar = ctk.CTkProgressBar(slot, width=560)
+            bar.set(0)
+            bar.pack(padx=10, pady=(0, 8))
+            self._worker_bars.append(bar)
+
+        self.log_box = ctk.CTkTextbox(inner, width=580, height=140, state="disabled")
+        self.log_box.pack(pady=(8, 0))
 
         self.stop_btn = ctk.CTkButton(
             inner, text="Stop", width=100, fg_color="#c0392b",
@@ -375,16 +427,25 @@ class App(ctk.CTk):
 
     def _do_verify(self, token):
         try:
-            temp = VimeoDownloader(token, log_callback=lambda m: None)
+            temp = VimeoDownloader(token, download_dir=None, log_callback=lambda m: None)
             folders = temp.get_user_folders()
             self._folders = folders
             self._access_token = token
 
             names = ["All videos"] + [f.get("name", "Untitled") for f in folders]
-            self.after(0, lambda: self.vimeo_folder_menu.configure(values=names))
-            self.after(0, lambda: self.vimeo_folder_var.set("All videos"))
+
+            def _update_menu():
+                # Recreate the option menu so values reliably refresh
+                self.vimeo_folder_menu.destroy()
+                self.vimeo_folder_var.set("All videos")
+                self.vimeo_folder_menu = ctk.CTkOptionMenu(
+                    self.step3.body, variable=self.vimeo_folder_var,
+                    values=names, width=580
+                )
+                self.vimeo_folder_menu.pack(pady=(0, 8), before=self.vimeo_folder_continue_btn)
 
             masked = f"…{token[-6:]}"
+            self.after(0, _update_menu)
             self.after(0, lambda: self.step1.set_done(f"Token verified ({masked})"))
             self.after(0, lambda: self._go_to_step(2))
             self.after(0, lambda: self._log(f"✓ Token verified. Found {len(folders)} folder(s)."))
@@ -465,6 +526,19 @@ class App(ctk.CTk):
         self.progress_label.configure(text="Starting…")
         self._stop_flag = False
 
+        # Reset all worker slots
+        for i in range(3):
+            self._worker_bars[i].set(0)
+            self._worker_labels[i].configure(text="—", text_color="#888888")
+
+        # Slot assignment: maps video name → slot index (thread-safe)
+        self._slot_map = {}
+        self._free_slots = list(range(3))
+        self._slot_lock = threading.Lock()
+        # Speed tracking: slot -> (last_bytes, last_time)
+        self._slot_speed = {i: (0, 0.0) for i in range(3)}
+        self._last_slot_speed = {i: 0 for i in range(3)}
+
         threading.Thread(
             target=self._run_download,
             args=(quality,),
@@ -490,16 +564,98 @@ class App(ctk.CTk):
                     text=f"{completed} of {total} videos"
                 ))
 
+            def on_file_progress(name, done, total_bytes):
+                import time
+                now = time.monotonic()
+
+                # Assign a slot the first time we see this file
+                with self._slot_lock:
+                    if name not in self._slot_map:
+                        if self._free_slots:
+                            slot = self._free_slots.pop(0)
+                            self._slot_map[name] = slot
+                            self._slot_speed[slot] = (0, now)
+                        else:
+                            return
+                    slot = self._slot_map[name]
+
+                # Calculate per-slot speed
+                prev_bytes, prev_time = self._slot_speed[slot]
+                elapsed = now - prev_time
+                if elapsed > 0.3:  # update speed every ~300ms
+                    speed_bps = (done - prev_bytes) / elapsed
+                    self._slot_speed[slot] = (done, now)
+                else:
+                    speed_bps = None  # not enough time elapsed, keep last
+
+                pct = done / total_bytes if total_bytes else 0
+                done_mb = done / (1024 * 1024)
+                total_mb = total_bytes / (1024 * 1024)
+                display = name if len(name) <= 35 else name[:33] + "…"
+                file_label = f"{display}  {done_mb:.1f} / {total_mb:.1f} MB  ({pct*100:.0f}%)"
+
+                def _fmt_speed(bps):
+                    if bps is None or bps < 0:
+                        return ""
+                    if bps >= 1024 * 1024:
+                        return f"{bps / (1024*1024):.1f} MB/s"
+                    return f"{bps / 1024:.0f} KB/s"
+
+                speed_str = _fmt_speed(speed_bps) if speed_bps is not None else None
+
+                # Sum all active slot speeds for total bandwidth
+                def _update(s=slot, p=pct, fl=file_label, ss=speed_str, sb=speed_bps):
+                    self._worker_bars[s].set(p)
+                    self._worker_labels[s].configure(text=fl, text_color="#cccccc")
+                    if ss is not None:
+                        self._worker_speed_labels[s].configure(text=ss)
+                        self._last_slot_speed[s] = sb if sb else 0
+                        total_bps = sum(self._last_slot_speed.values())
+                        bw = _fmt_speed(total_bps)
+                        self.bandwidth_label.configure(
+                            text=f"Total bandwidth: {bw}" if bw else ""
+                        )
+                self.after(0, _update)
+
+                # Release slot when complete
+                if done >= total_bytes and total_bytes > 0:
+                    def _release(s=slot, n=name):
+                        with self._slot_lock:
+                            if n in self._slot_map:
+                                del self._slot_map[n]
+                                self._free_slots.append(s)
+                        self._slot_speed[s] = (0, 0.0)
+                        self._last_slot_speed[s] = 0
+                        total_bps = sum(self._last_slot_speed.values())
+                        bw = _fmt_speed(total_bps)
+                        self._worker_bars[s].set(0)
+                        self._worker_labels[s].configure(text="—", text_color="#888888")
+                        self._worker_speed_labels[s].configure(text="")
+                        self.bandwidth_label.configure(
+                            text=f"Total bandwidth: {bw}" if bw else ""
+                        )
+                    self.after(200, _release)
+
             counts = self._downloader.download_all(
                 retry_mode=self.retry_var.get(),
                 folder_id=self._selected_folder_id,
-                overall_progress_callback=on_progress
+                overall_progress_callback=on_progress,
+                file_progress_callback=on_file_progress
             )
 
             summary = (f"Done — ✅ {counts['successful']}  ❌ {counts['failed']}  "
                        f"⏭️ {counts['skipped']}  🔄 {counts['retry']}")
             self.after(0, lambda: self.progress_bar.set(1))
             self.after(0, lambda: self.progress_label.configure(text=summary))
+            # Reset all worker slots
+            def _reset_slots():
+                for i in range(3):
+                    self._worker_bars[i].set(0)
+                    self._worker_labels[i].configure(text="—", text_color="#888888")
+                    self._worker_speed_labels[i].configure(text="")
+                self._last_slot_speed = {}
+                self.bandwidth_label.configure(text="")
+            self.after(0, _reset_slots)
             self._log(summary)
 
         except Exception as e:
@@ -508,9 +664,46 @@ class App(ctk.CTk):
             self.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
     def _stop_download(self):
-        self._log("⚠️  Stop requested — finishing current video then stopping.")
-        self._stop_flag = True
-        self.stop_btn.configure(state="disabled")
+        # Confirmation dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Stop downloads?")
+        dialog.geometry("400x160")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog, text="Stop all downloads?",
+            font=ctk.CTkFont(size=15, weight="bold")
+        ).pack(padx=24, pady=(20, 4), anchor="w")
+
+        ctk.CTkLabel(
+            dialog,
+            text="Any files currently downloading will be deleted.",
+            font=ctk.CTkFont(size=12), text_color="#888888"
+        ).pack(padx=24, anchor="w")
+
+        btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_row.pack(pady=20)
+
+        def _confirm():
+            dialog.destroy()
+            self.stop_btn.configure(state="disabled")
+            self._log("⚠️  Stopping downloads and removing partial files…")
+            if self._downloader:
+                self._downloader.cancel()
+
+        def _cancel():
+            dialog.destroy()
+
+        ctk.CTkButton(
+            btn_row, text="Stop Downloads", width=140,
+            fg_color="#c0392b", hover_color="#922b21", command=_confirm
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_row, text="Keep Going", width=120,
+            fg_color="#2a2a2a", hover_color="#3a3a3a", command=_cancel
+        ).pack(side="left")
 
     # ------------------------------------------------------------------ #
     #  Logging                                                             #

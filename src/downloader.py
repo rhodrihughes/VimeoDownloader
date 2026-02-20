@@ -7,6 +7,7 @@ import os
 import requests
 import csv
 import threading
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,14 +33,17 @@ class VimeoDownloader:
         self.enable_multithreading = enable_multithreading
         self.max_workers = max_workers
         self.csv_lock = threading.Lock()
+        self._cancel_flag = False
+        self._active_filepaths = set()   # filepaths currently being written
+        self._active_lock = threading.Lock()
 
         # Optional callback for GUI log output: log_callback(message: str)
         self.log_callback = log_callback
 
         if download_dir:
-            self.download_dir = Path(download_dir)
+            self.download_dir = Path(download_dir) / "vimeo_downloads"
         else:
-            self.download_dir = Path("vimeo_downloads")
+            self.download_dir = Path(tempfile.gettempdir()) / "vimeo_downloads"
 
         self.download_dir.mkdir(exist_ok=True, parents=True)
         self._log(f"✓ Download directory: {self.download_dir.absolute()}")
@@ -271,6 +275,20 @@ class VimeoDownloader:
 
         return None
 
+    def cancel(self):
+        """Signal all in-progress downloads to stop and delete partial files."""
+        self._cancel_flag = True
+        with self._active_lock:
+            for fp in list(self._active_filepaths):
+                try:
+                    p = Path(fp)
+                    if p.exists():
+                        p.unlink()
+                        self._log(f"🗑️  Removed partial file: {p.name}")
+                except Exception:
+                    pass
+            self._active_filepaths.clear()
+
     def sanitize_filename(self, filename):
         for char in '<>:"/\\|?*':
             filename = filename.replace(char, "_")
@@ -350,19 +368,36 @@ class VimeoDownloader:
             self.log_to_csv(log_data)
             return True
 
+        if self._cancel_flag:
+            return False
+
         try:
             response = requests.get(download_url, stream=True)
             response.raise_for_status()
             total_size = int(response.headers.get("content-length", 0))
             downloaded = 0
 
+            with self._active_lock:
+                self._active_filepaths.add(str(filepath))
+
             with open(filepath, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
+                    if self._cancel_flag:
+                        break
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if progress_callback:
                             progress_callback(downloaded, total_size)
+
+            with self._active_lock:
+                self._active_filepaths.discard(str(filepath))
+
+            if self._cancel_flag:
+                if filepath.exists():
+                    filepath.unlink()
+                    self._log(f"🗑️  Removed partial file: {filepath.name}")
+                return False
 
             self._log(f"  ✅ Saved: {filepath.name}")
             log_data['status'] = 'Success'
@@ -379,9 +414,12 @@ class VimeoDownloader:
                 filepath.unlink()
             return False
 
-    def download_all(self, retry_mode=False, folder_id=None, overall_progress_callback=None):
+    def download_all(self, retry_mode=False, folder_id=None, overall_progress_callback=None,
+                     file_progress_callback=None):
         """
-        Download all videos. overall_progress_callback(completed, total) called after each video.
+        Download all videos.
+        overall_progress_callback(completed, total) called after each video.
+        file_progress_callback(video_name, bytes_done, bytes_total) called during each file download.
         Returns dict with counts: successful, failed, skipped, retry.
         """
         if retry_mode:
@@ -408,7 +446,11 @@ class VimeoDownloader:
         if self.enable_multithreading:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 future_to_video = {
-                    executor.submit(self.download_video, video, idx, total): (video, idx)
+                    executor.submit(
+                        self.download_video, video, idx, total,
+                        (lambda n: lambda d, t: file_progress_callback(n, d, t))(video.get("name", "Untitled"))
+                        if file_progress_callback else None
+                    ): (video, idx)
                     for idx, video in enumerate(videos_to_download, 1)
                 }
                 for future in as_completed(future_to_video):
@@ -423,7 +465,10 @@ class VimeoDownloader:
                         overall_progress_callback(len(results), total)
         else:
             for idx, video in enumerate(videos_to_download, 1):
-                result = self.download_video(video, idx, total)
+                name = video.get("name", "Untitled")
+                per_file_cb = (lambda n: lambda d, t: file_progress_callback(n, d, t))(name) \
+                    if file_progress_callback else None
+                result = self.download_video(video, idx, total, per_file_cb)
                 results.append(result)
                 if overall_progress_callback:
                     overall_progress_callback(idx, total)

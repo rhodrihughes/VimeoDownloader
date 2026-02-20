@@ -2,18 +2,38 @@
 # Run from project root: pyinstaller build/mac.spec
 
 import os
-PROJ_ROOT = os.path.abspath(os.path.join(os.path.dirname(SPECPATH), ''))
-# SPECPATH is set by PyInstaller to the directory containing this spec file
-# So PROJ_ROOT = parent of build/ = project root
+import sys
+import glob
+
+os.environ.setdefault('MACOSX_DEPLOYMENT_TARGET', '13.0')
+
 PROJ_ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 
 block_cipher = None
 
+# Locate the Tcl/Tk framework bundled with this Python installation.
+# python.org builds ship Tcl/Tk inside the framework at a known path.
+_py_prefix = sys.prefix  # e.g. /Library/Frameworks/Python.framework/Versions/3.x
+_tcltk_base = os.path.join(_py_prefix, 'lib')
+
+# Collect all Tcl/Tk dylibs so they land next to the executable.
+_tcltk_binaries = []
+for _pattern in ('libtcl*.dylib', 'libtk*.dylib'):
+    for _lib in glob.glob(os.path.join(_tcltk_base, _pattern)):
+        _tcltk_binaries.append((_lib, '.'))
+
+# Bundle the Tcl/Tk library data directories (init scripts, encodings, etc.)
+_tcltk_datas = []
+for _dir_pattern in ('tcl*', 'tk*'):
+    for _d in glob.glob(os.path.join(_tcltk_base, _dir_pattern)):
+        if os.path.isdir(_d):
+            _tcltk_datas.append((_d, os.path.basename(_d)))
+
 a = Analysis(
     [os.path.join(PROJ_ROOT, 'src', 'main.py')],
     pathex=[os.path.join(PROJ_ROOT, 'src')],
-    binaries=[],
-    datas=[],
+    binaries=_tcltk_binaries,
+    datas=_tcltk_datas,
     hiddenimports=['customtkinter', 'tkinter', 'tkinter.filedialog', '_tkinter'],
     hookspath=[],
     runtime_hooks=[],
@@ -54,5 +74,6 @@ app = BUNDLE(
     info_plist={
         'NSHighResolutionCapable': True,
         'CFBundleShortVersionString': '1.0.0',
+        'LSMinimumSystemVersion': '13.0',
     },
 )

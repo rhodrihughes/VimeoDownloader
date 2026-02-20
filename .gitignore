@@ -13,8 +13,10 @@ MANIFEST
 env/
 venv/
 
-# PyInstaller output (built binaries, not the spec configs)
+# PyInstaller output (built binaries and intermediate artifacts, not the spec configs)
 dist/
+build/mac/
+build/windows/
 *.manifest
 
 # macOS
