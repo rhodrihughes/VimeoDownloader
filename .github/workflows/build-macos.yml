@@ -7,7 +7,15 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -29,9 +37,9 @@ jobs:
       - name: Zip app bundle
         run: |
           cd dist
-          zip -r VimeoDownloader-${{ github.ref_name }}-macos.zip VimeoDownloader.app
+          zip -r VimeoDownloader-${{ github.ref_name }}-macos-${{ matrix.arch }}.zip VimeoDownloader.app
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/VimeoDownloader-${{ github.ref_name }}-macos.zip
+          files: dist/VimeoDownloader-${{ github.ref_name }}-macos-${{ matrix.arch }}.zip
