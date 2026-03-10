@@ -72,7 +72,7 @@
  [],
  False,
  False,
- 1771618040,
+ 1773183638,
  [('runw',
    '/Users/rhodri/Documents/Coding '
    'Projects/VimeoDownloader/.venv/lib/python3.13/site-packages/PyInstaller/bootloader/Darwin-64bit/runw',

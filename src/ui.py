@@ -5,9 +5,11 @@ CustomTkinter GUI for Vimeo Downloader — wizard-style stepped flow.
 
 import threading
 import re
+import sys
+import webbrowser
 import customtkinter as ctk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, Menu
 from downloader import VimeoDownloader
 
 ctk.set_appearance_mode("dark")
@@ -97,6 +99,50 @@ class App(ctk.CTk):
 
         self._build_ui()
         self._go_to_step(1)
+        self._setup_macos_about_menu()
+
+    # ------------------------------------------------------------------ #
+    #  macOS About menu                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _setup_macos_about_menu(self):
+        """Override the default macOS 'About' menu item to show our custom dialog."""
+        if sys.platform != "darwin":
+            return
+        # Tkinter on macOS automatically creates an app menu; we just need to
+        # bind the "About" command to our handler.
+        self.createcommand("tkAboutDialog", self._show_about)
+
+    def _show_about(self):
+        win = ctk.CTkToplevel(self)
+        win.title("About Vimeo Downloader")
+        win.geometry("380x180")
+        win.resizable(False, False)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win, text="Vimeo Downloader",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(padx=24, pady=(24, 6), anchor="w")
+
+        made_by_frame = ctk.CTkFrame(win, fg_color="transparent")
+        made_by_frame.pack(padx=24, anchor="w")
+
+        ctk.CTkLabel(
+            made_by_frame, text="Made by ",
+            font=ctk.CTkFont(size=13), text_color="#888888"
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            made_by_frame, text="Rhodri Hughes",
+            font=ctk.CTkFont(size=13), fg_color="transparent",
+            hover_color="#2a2a2a", text_color="#5b9bd5", cursor="hand2",
+            width=0, command=lambda: webbrowser.open("https://github.com/rhodrihughes/")
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            win, text="Close", width=100, command=win.destroy
+        ).pack(pady=20)
 
     # ------------------------------------------------------------------ #
     #  UI construction                                                     #

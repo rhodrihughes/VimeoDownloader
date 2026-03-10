@@ -1,0 +1,37 @@
+name: Build macOS App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-13
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build macOS app
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
+        run: pyinstaller build/mac.spec
+
+      - name: Zip app bundle
+        run: |
+          cd dist
+          zip -r VimeoDownloader-${{ github.ref_name }}-macos.zip VimeoDownloader.app
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/VimeoDownloader-${{ github.ref_name }}-macos.zip

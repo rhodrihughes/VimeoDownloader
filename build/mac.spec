@@ -75,5 +75,6 @@ app = BUNDLE(
         'NSHighResolutionCapable': True,
         'CFBundleShortVersionString': '1.0.0',
         'LSMinimumSystemVersion': '13.0',
+        'CFBundleGetInfoString': 'Made by Rhodri Hughes\nhttps://github.com/rhodrihughes/',
     },
 )
